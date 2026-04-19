@@ -5,6 +5,14 @@
         <div class="card-header">
           <span>历史数据查询</span>
           <div class="actions">
+            <el-button
+              type="warning"
+              @click="generateReport"
+              :loading="reportLoading"
+              :disabled="!form.timeRange || form.timeRange.length !== 2"
+            >
+              <el-icon><Document /></el-icon>AI生成报告
+            </el-button>
             <el-button type="primary" @click="fetchData" :loading="loading">
               <el-icon><Search /></el-icon>查询
             </el-button>
@@ -26,7 +34,7 @@
             />
           </el-select>
         </el-form-item>
-        
+
         <el-form-item label="时间范围">
           <el-date-picker
             v-model="form.timeRange"
@@ -54,7 +62,8 @@
             <el-radio-button label="all">全部</el-radio-button>
             <el-radio-button label="temperature">温度</el-radio-button>
             <el-radio-button label="humidity">湿度</el-radio-button>
-            <el-radio-button label="gas">气体</el-radio-button>
+            <el-radio-button label="gas">有害气体</el-radio-button>
+            <el-radio-button label="co2">二氧化碳</el-radio-button>
           </el-radio-group>
         </div>
       </template>
@@ -94,9 +103,14 @@
             <span :class="getHumidityClass(row.humidity)">{{ row.humidity }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="gas_concentration" label="气体浓度(ppm)" sortable>
+        <el-table-column prop="gas_concentration" label="有害气体(ppm)" sortable>
           <template #default="{ row }">
             <span :class="getGasClass(row.gas_concentration)">{{ row.gas_concentration }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="co2" label="CO2(ppm)" sortable>
+          <template #default="{ row }">
+            <span :class="getCo2Class(row.co2)">{{ row.co2 }}</span>
           </template>
         </el-table-column>
       </el-table>
@@ -111,339 +125,483 @@
         />
       </div>
     </el-card>
+
+    <!-- AI 报告对话框 -->
+    <el-dialog
+      v-model="reportDialogVisible"
+      title="环境数据智能分析报告"
+      width="70%"
+      :close-on-click-modal="false"
+      class="report-dialog"
+    >
+      <div v-loading="reportLoading" class="report-content" v-html="formattedReport"></div>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="reportDialogVisible = false">关闭</el-button>
+          <el-button type="primary" @click="printReport" :disabled="reportLoading"
+            >打印报告</el-button
+          >
+        </span>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, computed, watch, nextTick, onBeforeUnmount } from 'vue';
-import { Search, Download } from '@element-plus/icons-vue';
-import { ElMessage } from 'element-plus';
-import * as echarts from 'echarts';
-import api from '@/api';
+import { ref, reactive, onMounted, computed, watch, onBeforeUnmount } from 'vue'
+import { Search, Download, Document } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import * as echarts from 'echarts'
+import api from '@/api'
 
 // 状态变量
-const loading = ref(false);
-const devices = ref([{ device_id: 'ESP32_001', name: '1号牛舍' }]);
-const tableData = ref([]);
-const total = ref(0);
+const loading = ref(false)
+const devices = ref([{ device_id: 'ESP32_001', name: '1号牛舍' }])
+const tableData = ref([])
+const total = ref(0)
 
 // 分页
-const currentPage = ref(1);
-const pageSize = ref(20);
+const currentPage = ref(1)
+const pageSize = ref(20)
 
 // 图表
-const historyChartRef = ref(null);
-let chartInstance = null;
-const chartType = ref('all');
+const historyChartRef = ref(null)
+let chartInstance = null
+const chartType = ref('all')
+
+// 报告相关
+const reportDialogVisible = ref(false)
+const reportLoading = ref(false)
+const rawReport = ref('')
+
+const formattedReport = computed(() => {
+  if (!rawReport.value) return '暂无报告数据'
+  // 简单的 Markdown 转 HTML 处理（处理加粗、列表和换行）
+  let html = rawReport.value
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/\n- /g, '<br/>• ')
+    .replace(/\n\d+\. /g, (match) => `<br/><strong>${match.trim()}</strong> `)
+    .replace(/\n/g, '<br/>')
+  return `<p>${html}</p>`
+})
 
 // 表单数据
 const form = reactive({
   device_id: 'ESP32_001',
   timeRange: [],
-  limit: 200
-});
+  limit: 200,
+})
 
 // 日期快捷选项
 const shortcuts = [
   {
     text: '最近1小时',
     value: () => {
-      const end = new Date();
-      const start = new Date();
-      start.setTime(start.getTime() - 3600 * 1000);
-      return [start, end];
+      const end = new Date()
+      const start = new Date()
+      start.setTime(start.getTime() - 3600 * 1000)
+      return [start, end]
     },
   },
   {
     text: '最近24小时',
     value: () => {
-      const end = new Date();
-      const start = new Date();
-      start.setTime(start.getTime() - 3600 * 1000 * 24);
-      return [start, end];
+      const end = new Date()
+      const start = new Date()
+      start.setTime(start.getTime() - 3600 * 1000 * 24)
+      return [start, end]
     },
   },
   {
     text: '最近7天',
     value: () => {
-      const end = new Date();
-      const start = new Date();
-      start.setTime(start.getTime() - 3600 * 1000 * 24 * 7);
-      return [start, end];
+      const end = new Date()
+      const start = new Date()
+      start.setTime(start.getTime() - 3600 * 1000 * 24 * 7)
+      return [start, end]
     },
   },
-];
+]
 
 // 计算分页后的数据
 const paginatedData = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value;
-  const end = start + pageSize.value;
-  return tableData.value.slice(start, end);
-});
+  const start = (currentPage.value - 1) * pageSize.value
+  const end = start + pageSize.value
+  return tableData.value.slice(start, end)
+})
+
+// 从后端获取的动态阈值
+const thresholds = ref({
+  temperature: { min: 10, max: 30 },
+  humidity: { min: 40, max: 80 },
+  gas: { max: 50 },
+  co2: { max: 1000 },
+})
+
+// 加载阈值
+async function loadThresholds() {
+  try {
+    const res = await api.alarm.getThresholds()
+    if (res.success && res.data) {
+      thresholds.value = res.data
+    }
+  } catch (error) {
+    console.error('获取阈值配置失败', error)
+  }
+}
 
 // 初始化
 onMounted(async () => {
   // 设置默认时间为最近24小时
-  const end = new Date();
-  const start = new Date();
-  start.setTime(start.getTime() - 3600 * 1000 * 24);
-  
+  const end = new Date()
+  const start = new Date()
+  start.setTime(start.getTime() - 3600 * 1000 * 24)
+
   // 格式化为本地时间字符串 YYYY-MM-DD HH:mm:ss
   const formatObj = (date) => {
-    const d = new Date(date);
-    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-    return d.toISOString().slice(0, 19).replace('T', ' ');
-  };
-  
-  form.timeRange = [formatObj(start), formatObj(end)];
+    const d = new Date(date)
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset())
+    return d.toISOString().slice(0, 19).replace('T', ' ')
+  }
 
-  await loadDevices();
-  await fetchData();
-  
-  window.addEventListener('resize', handleResize);
-});
+  form.timeRange = [formatObj(start), formatObj(end)]
+
+  await loadThresholds()
+  await loadDevices()
+  await fetchData()
+
+  window.addEventListener('resize', handleResize)
+})
 
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', handleResize);
+  window.removeEventListener('resize', handleResize)
   if (chartInstance) {
-    chartInstance.dispose();
+    chartInstance.dispose()
   }
-});
+})
 
 function handleResize() {
   if (chartInstance) {
-    chartInstance.resize();
+    chartInstance.resize()
   }
 }
 
 // 加载设备列表
 async function loadDevices() {
   try {
-    const res = await api.device.getDevices();
+    const res = await api.device.getDevices()
     if (res.success && res.devices.length > 0) {
-      devices.value = res.devices;
-      if (!devices.value.find(d => d.device_id === form.device_id)) {
-        form.device_id = devices.value[0].device_id;
+      devices.value = res.devices
+      if (!devices.value.find((d) => d.device_id === form.device_id)) {
+        form.device_id = devices.value[0].device_id
       }
     }
   } catch (error) {
-    console.error('获取设备列表失败', error);
+    console.error('获取设备列表失败', error)
   }
 }
 
 // 获取历史数据
 async function fetchData() {
-  loading.value = true;
+  loading.value = true
   try {
     const params = {
       device_id: form.device_id,
-      limit: form.limit
-    };
-    
-    if (form.timeRange && form.timeRange.length === 2) {
-      params.start_time = form.timeRange[0];
-      params.end_time = form.timeRange[1];
+      limit: form.limit,
     }
 
-    const res = await api.sensor.getHistory(params);
+    if (form.timeRange && form.timeRange.length === 2) {
+      params.start_time = form.timeRange[0]
+      params.end_time = form.timeRange[1]
+    }
+
+    const res = await api.sensor.getHistory(params)
     if (res.success) {
       // API返回的数据通常是按时间倒序的，为了画图，我们需要正序
-      tableData.value = res.data;
-      total.value = res.count;
-      currentPage.value = 1;
-      
-      initChart();
+      tableData.value = res.data
+      total.value = res.count
+      currentPage.value = 1
+
+      initChart()
     } else {
-      ElMessage.error(res.error || '获取历史数据失败');
+      ElMessage.error(res.error || '获取历史数据失败')
     }
   } catch (error) {
-    console.error('获取历史数据异常', error);
-    ElMessage.error('网络请求异常');
+    console.error('获取历史数据异常', error)
+    ElMessage.error('网络请求异常')
   } finally {
-    loading.value = false;
+    loading.value = false
   }
 }
 
 // 初始化/更新图表
 function initChart() {
-  if (!historyChartRef.value) return;
-  
+  if (!historyChartRef.value) return
+
   if (!chartInstance) {
-    chartInstance = echarts.init(historyChartRef.value);
+    chartInstance = echarts.init(historyChartRef.value)
   }
 
   // 图表数据需要按时间正序
-  const chartData = [...tableData.value].reverse();
-  const times = chartData.map(item => formatTime(item.created_at, 'MM-DD HH:mm'));
-  
-  const series = [];
-  const yAxis = [];
-  const legend = [];
-  const colors = ['#e6a23c', '#409eff', '#f56c6c'];
+  const chartData = [...tableData.value].reverse()
+  const times = chartData.map((item) => formatTime(item.created_at, 'MM-DD HH:mm'))
+
+  const series = []
+  const yAxis = []
+  const legend = []
+  const colors = ['#e6a23c', '#409eff', '#f56c6c', '#909399']
 
   if (chartType.value === 'all' || chartType.value === 'temperature') {
-    legend.push('温度');
+    legend.push('温度')
     series.push({
       name: '温度',
       type: 'line',
-      data: chartData.map(item => item.temperature),
+      data: chartData.map((item) => item.temperature),
       smooth: true,
       yAxisIndex: yAxis.length,
-      itemStyle: { color: colors[0] }
-    });
+      itemStyle: { color: colors[0] },
+    })
     yAxis.push({
       type: 'value',
       name: '温度(°C)',
       position: 'left',
-      axisLine: { show: true, lineStyle: { color: colors[0] } }
-    });
+      axisLine: { show: true, lineStyle: { color: colors[0] } },
+    })
   }
 
   if (chartType.value === 'all' || chartType.value === 'humidity') {
-    legend.push('湿度');
+    legend.push('湿度')
     series.push({
       name: '湿度',
       type: 'line',
-      data: chartData.map(item => item.humidity),
+      data: chartData.map((item) => item.humidity),
       smooth: true,
       yAxisIndex: yAxis.length,
-      itemStyle: { color: colors[1] }
-    });
+      itemStyle: { color: colors[1] },
+    })
     yAxis.push({
       type: 'value',
       name: '湿度(%)',
-      position: chartType.value === 'all' ? 'right' : 'left',
-      offset: 0,
-      axisLine: { show: true, lineStyle: { color: colors[1] } }
-    });
+      position: chartType.value === 'all' ? 'left' : 'left',
+      offset: chartType.value === 'all' ? 50 : 0,
+      axisLine: { show: true, lineStyle: { color: colors[1] } },
+    })
   }
 
   if (chartType.value === 'all' || chartType.value === 'gas') {
-    legend.push('气体浓度');
+    legend.push('有害气体')
     series.push({
-      name: '气体浓度',
+      name: '有害气体',
       type: 'line',
-      data: chartData.map(item => item.gas_concentration),
+      data: chartData.map((item) => item.gas_concentration),
       smooth: true,
       yAxisIndex: yAxis.length,
-      itemStyle: { color: colors[2] }
-    });
+      itemStyle: { color: colors[2] },
+    })
     yAxis.push({
       type: 'value',
       name: '气体(ppm)',
       position: 'right',
+      offset: 0,
+      axisLine: { show: true, lineStyle: { color: colors[2] } },
+    })
+  }
+
+  if (chartType.value === 'all' || chartType.value === 'co2') {
+    legend.push('CO2')
+    series.push({
+      name: 'CO2',
+      type: 'line',
+      data: chartData.map((item) => item.co2),
+      smooth: true,
+      yAxisIndex: yAxis.length,
+      itemStyle: { color: colors[3] },
+    })
+    yAxis.push({
+      type: 'value',
+      name: 'CO2(ppm)',
+      position: 'right',
       offset: chartType.value === 'all' ? 50 : 0,
-      axisLine: { show: true, lineStyle: { color: colors[2] } }
-    });
+      axisLine: { show: true, lineStyle: { color: colors[3] } },
+    })
   }
 
   const option = {
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'cross' }
+      axisPointer: { type: 'cross' },
     },
     legend: {
-      data: legend
+      data: legend,
     },
     grid: {
       left: '3%',
       right: chartType.value === 'all' ? '10%' : '4%',
       bottom: '10%',
-      containLabel: true
+      containLabel: true,
     },
     dataZoom: [
       {
         type: 'inside',
         start: 0,
-        end: 100
+        end: 100,
       },
       {
         type: 'slider',
         start: 0,
-        end: 100
-      }
+        end: 100,
+      },
     ],
     xAxis: {
       type: 'category',
       boundaryGap: false,
-      data: times
+      data: times,
     },
     yAxis: yAxis,
-    series: series
-  };
+    series: series,
+  }
 
-  chartInstance.setOption(option, true);
+  chartInstance.setOption(option, true)
 }
 
 // 监听图表类型切换
 watch(chartType, () => {
-  initChart();
-});
+  initChart()
+})
+
+// 生成 AI 周报
+async function generateReport() {
+  if (!form.timeRange || form.timeRange.length !== 2) {
+    ElMessage.warning('请先选择时间范围')
+    return
+  }
+
+  reportDialogVisible.value = true
+  reportLoading.value = true
+  rawReport.value = 'AI 正在努力分析数据，请稍候...\n(可能需要 5-15 秒的时间)'
+
+  try {
+    const res = await api.analysis.getWeeklyReport({
+      device_id: form.device_id,
+      start_date: form.timeRange[0],
+      end_date: form.timeRange[1],
+    })
+
+    if (res.success) {
+      rawReport.value = res.data
+    } else {
+      rawReport.value = '生成报告失败：' + (res.error || '未知错误')
+      ElMessage.error(res.error || '获取分析报告失败')
+    }
+  } catch (error) {
+    console.error('获取AI报告异常', error)
+    rawReport.value = '网络请求异常，无法获取报告内容。'
+  } finally {
+    reportLoading.value = false
+  }
+}
+
+function printReport() {
+  const printWindow = window.open('', '_blank')
+  printWindow.document.write(`
+    <html>
+      <head>
+        <title>牛舍环境智能分析报告</title>
+        <style>
+          body { font-family: 'Microsoft YaHei', sans-serif; padding: 40px; line-height: 1.6; color: #333; }
+          h1 { text-align: center; color: #2c3e50; }
+          strong { color: #2c3e50; }
+          p { margin-bottom: 15px; }
+        </style>
+      </head>
+      <body>
+        <h1>环境数据智能分析报告</h1>
+        <p style="text-align:right;color:#666;">报告设备：${form.device_id}<br/>报告周期：${form.timeRange[0]} 至 ${form.timeRange[1]}</p>
+        <hr/>
+        ${formattedReport.value}
+        <hr/>
+        <p style="text-align:center;font-size:12px;color:#999;">由牛舍环境监控系统 AI 引擎自动生成</p>
+      </body>
+    </html>
+  `)
+  printWindow.document.close()
+  setTimeout(() => {
+    printWindow.print()
+  }, 500)
+}
 
 // 导出CSV
 function exportCSV() {
   if (tableData.value.length === 0) {
-    ElMessage.warning('没有可导出的数据');
-    return;
+    ElMessage.warning('没有可导出的数据')
+    return
   }
 
-  const headers = ['设备ID', '温度(°C)', '湿度(%)', '气体浓度(ppm)', '采集时间'];
-  const rows = tableData.value.map(item => [
+  const headers = ['设备ID', '温度(°C)', '湿度(%)', '有害气体(ppm)', 'CO2(ppm)', '采集时间']
+  const rows = tableData.value.map((item) => [
     item.device_id,
     item.temperature,
     item.humidity,
     item.gas_concentration,
-    formatTime(item.created_at)
-  ]);
+    item.co2,
+    formatTime(item.created_at),
+  ])
 
-  let csvContent = "data:text/csv;charset=utf-8,\uFEFF"; // 加上 BOM 以支持中文
-  csvContent += headers.join(',') + '\n';
-  rows.forEach(row => {
-    csvContent += row.join(',') + '\n';
-  });
+  let csvContent = 'data:text/csv;charset=utf-8,\uFEFF' // 加上 BOM 以支持中文
+  csvContent += headers.join(',') + '\n'
+  rows.forEach((row) => {
+    csvContent += row.join(',') + '\n'
+  })
 
-  const encodedUri = encodeURI(csvContent);
-  const link = document.createElement("a");
-  link.setAttribute("href", encodedUri);
-  const filename = `牛舍环境历史数据_${form.device_id}_${new Date().getTime()}.csv`;
-  link.setAttribute("download", filename);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  
-  ElMessage.success('数据导出成功');
+  const encodedUri = encodeURI(csvContent)
+  const link = document.createElement('a')
+  link.setAttribute('href', encodedUri)
+  const filename = `牛舍环境历史数据_${form.device_id}_${new Date().getTime()}.csv`
+  link.setAttribute('download', filename)
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+
+  ElMessage.success('数据导出成功')
 }
 
 // 工具函数
 function formatTime(timeStr, format = 'YYYY-MM-DD HH:mm:ss') {
-  if (!timeStr) return '--';
-  const date = new Date(timeStr);
+  if (!timeStr) return '--'
+  const date = new Date(timeStr)
   if (format === 'MM-DD HH:mm') {
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    const h = String(date.getHours()).padStart(2, '0');
-    const min = String(date.getMinutes()).padStart(2, '0');
-    return `${m}-${d} ${h}:${min}`;
+    const m = String(date.getMonth() + 1).padStart(2, '0')
+    const d = String(date.getDate()).padStart(2, '0')
+    const h = String(date.getHours()).padStart(2, '0')
+    const min = String(date.getMinutes()).padStart(2, '0')
+    return `${m}-${d} ${h}:${min}`
   }
-  return date.toLocaleString('zh-CN');
+  return date.toLocaleString('zh-CN')
 }
 
 function getTempClass(temp) {
-  if (temp >= 28) return 'text-danger';
-  if (temp <= 12) return 'text-warning';
-  return 'text-success';
+  if (temp >= thresholds.value.temperature.max) return 'text-danger'
+  if (temp <= thresholds.value.temperature.min) return 'text-warning'
+  return 'text-success'
 }
 
 function getHumidityClass(humidity) {
-  if (humidity >= 75) return 'text-danger';
-  if (humidity <= 45) return 'text-warning';
-  return 'text-success';
+  if (humidity >= thresholds.value.humidity.max) return 'text-danger'
+  if (humidity <= thresholds.value.humidity.min) return 'text-warning'
+  return 'text-success'
 }
 
 function getGasClass(gas) {
-  if (gas >= 40) return 'text-danger';
-  if (gas >= 30) return 'text-warning';
-  return 'text-success';
+  if (gas >= thresholds.value.gas.max) return 'text-danger'
+  if (gas >= thresholds.value.gas.max * 0.8) return 'text-warning'
+  return 'text-success'
+}
+
+function getCo2Class(co2) {
+  if (co2 >= thresholds.value.co2.max) return 'text-danger'
+  if (co2 >= thresholds.value.co2.max * 0.8) return 'text-warning'
+  return 'text-success'
 }
 </script>
 
@@ -488,14 +646,41 @@ function getGasClass(gas) {
   font-weight: normal;
 }
 
-.pagination-container {
-  margin-top: 20px;
-  display: flex;
-  justify-content: flex-end;
+.report-dialog :deep(.el-dialog__body) {
+  padding-top: 10px;
+}
+
+.report-content {
+  min-height: 200px;
+  max-height: 60vh;
+  overflow-y: auto;
+  line-height: 1.8;
+  font-size: 15px;
+  color: #333;
+  padding: 10px 20px;
+  background: #f9fafc;
+  border-radius: 8px;
+  border: 1px solid #ebeef5;
+}
+
+.report-content :deep(strong) {
+  color: #409eff;
+}
+
+.report-content :deep(p) {
+  margin-bottom: 10px;
 }
 
 /* 文字颜色状态 */
-.text-danger { color: #f56c6c; font-weight: bold; }
-.text-warning { color: #e6a23c; font-weight: bold; }
-.text-success { color: #67c23a; }
+.text-danger {
+  color: #f56c6c;
+  font-weight: bold;
+}
+.text-warning {
+  color: #e6a23c;
+  font-weight: bold;
+}
+.text-success {
+  color: #67c23a;
+}
 </style>

@@ -1,6 +1,9 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2');
+const aiAnalysisService = require('./services/aiAnalysisService');
+
 const app = express();
 const PORT = 3000;
 
@@ -31,7 +34,8 @@ db.connect((err) => {
 let alarmThresholds = {
   temperature: { min: 10, max: 30 },
   humidity: { min: 40, max: 80 },
-  gas: { max: 50 }
+  gas: { max: 50 },
+  co2: { max: 1000 } // 二氧化碳阈值，单位ppm
 };
 
 // 获取报警阈值
@@ -44,10 +48,11 @@ app.get('/api/thresholds', (req, res) => {
 
 // 设置报警阈值
 app.put('/api/thresholds', (req, res) => {
-  const { temperature, humidity, gas } = req.body;
+  const { temperature, humidity, gas, co2 } = req.body;
   if (temperature) alarmThresholds.temperature = temperature;
   if (humidity) alarmThresholds.humidity = humidity;
   if (gas) alarmThresholds.gas = gas;
+  if (co2) alarmThresholds.co2 = co2;
   
   res.json({
     success: true,
@@ -58,21 +63,24 @@ app.put('/api/thresholds', (req, res) => {
 
 // 1. 接收ESP32传感器数据
 app.post('/api/sensor-data', (req, res) => {
-  const { device_id, temperature, humidity, gas_concentration } = req.body;
-  console.log('📡 收到传感器数据:', { device_id, temperature, humidity, gas_concentration });
+  const { device_id, temperature, humidity, gas_concentration, co2 } = req.body;
+  console.log('📡 收到传感器数据:', { device_id, temperature, humidity, gas_concentration, co2 });
 
   // 验证数据
   if (!device_id) {
     return res.status(400).json({ success: false, error: '缺少设备ID' });
   }
 
+  // 如果前端没有发送co2，则生成模拟CO2值
+  const simulatedCO2 = co2 !== undefined ? co2 : generateSimulatedCO2(temperature, humidity, gas_concentration);
+  
   // 插入传感器数据
   const sensorQuery = `
-    INSERT INTO sensor_data (device_id, temperature, humidity, gas_concentration) 
-    VALUES (?, ?, ?, ?)
+    INSERT INTO sensor_data (device_id, temperature, humidity, gas_concentration, co2) 
+    VALUES (?, ?, ?, ?, ?)
   `;
   
-  db.query(sensorQuery, [device_id, temperature, humidity, gas_concentration], (err, result) => {
+  db.query(sensorQuery, [device_id, temperature, humidity, gas_concentration, simulatedCO2], (err, result) => {
     if (err) {
       console.error('插入传感器数据失败:', err);
       return res.status(500).json({ success: false, error: '数据存储失败' });
@@ -92,16 +100,44 @@ app.post('/api/sensor-data', (req, res) => {
     });
 
     // 检查报警
-    checkAlarms(device_id, temperature, humidity, gas_concentration);
+    checkAlarms(device_id, temperature, humidity, gas_concentration, simulatedCO2);
 
     res.json({ 
       success: true, 
       message: '数据接收成功',
       data_id: result.insertId,
-      timestamp: new Date().toLocaleString()
+      timestamp: new Date().toLocaleString(),
+      note: co2 === undefined ? 'CO2为模拟值' : 'CO2为实测值'
     });
   });
 });
+
+// 模拟CO2生成函数
+function generateSimulatedCO2(temperature, humidity, gasConcentration) {
+  // 基础CO2浓度（牛舍正常范围800-1500ppm）
+  const baseCO2 = 1000;
+  
+  // 温度影响：温度每升高1°C，CO2增加15ppm
+  const tempFactor = (temperature - 25) * 15;
+  
+  // 湿度影响：湿度每升高1%，CO2增加8ppm
+  const humidityFactor = (humidity - 60) * 8;
+  
+  // 气体浓度影响：如果有氨气浓度，也作为参考
+  const gasFactor = gasConcentration ? gasConcentration * 0.1 : 0;
+  
+  // 随机波动 ±50ppm
+  const randomFactor = (Math.random() * 100 - 50);
+  
+  // 计算最终CO2值
+  let co2 = baseCO2 + tempFactor + humidityFactor + gasFactor + randomFactor;
+  
+  // 确保在合理范围内（600-2500ppm）
+  co2 = Math.max(600, Math.min(2500, co2));
+  
+  // 保留两位小数
+  return parseFloat(co2.toFixed(2));
+}
 
 // 2. 获取最新数据
 app.get('/api/realtime', (req, res) => {
@@ -277,7 +313,8 @@ app.get('/api/statistics', (req, res) => {
       SELECT 
         AVG(temperature) as avg_temp,
         AVG(humidity) as avg_humidity,
-        AVG(gas_concentration) as avg_gas
+        AVG(gas_concentration) as avg_gas,
+        AVG(co2) as avg_co2
       FROM sensor_data 
       WHERE device_id = ? AND DATE(created_at) = ?
     `,
@@ -303,6 +340,7 @@ app.get('/api/statistics', (req, res) => {
             avgTemperature: result2[0]?.avg_temp ? parseFloat(result2[0].avg_temp).toFixed(1) : 0,
             avgHumidity: result2[0]?.avg_humidity ? parseFloat(result2[0].avg_humidity).toFixed(1) : 0,
             avgGas: result2[0]?.avg_gas ? parseFloat(result2[0].avg_gas).toFixed(1) : 0,
+            avgCo2: result2[0]?.avg_co2 ? parseFloat(result2[0].avg_co2).toFixed(1) : 0,
             unreadAlarmCount: result3[0]?.count || 0
           }
         });
@@ -321,15 +359,17 @@ app.post('/api/mock-data', (req, res) => {
     const temp = 20 + Math.random() * 10; // 20-30度
     const humidity = 50 + Math.random() * 30; // 50-80%
     const gas = 20 + Math.random() * 30; // 20-50 ppm
+    const co2 = generateSimulatedCO2(temp, humidity, gas);
     const timeOffset = i * 3600000; // 每1小时一条
     
     const query = `
-      INSERT INTO sensor_data (device_id, temperature, humidity, gas_concentration, created_at) 
-      VALUES (?, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? HOUR))
+      INSERT INTO sensor_data (device_id, temperature, humidity, gas_concentration, co2, created_at) 
+      VALUES (?, ?, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? SECOND))
     `;
     
     insertPromises.push(new Promise((resolve, reject) => {
-      db.query(query, [deviceId, temp.toFixed(1), humidity.toFixed(1), gas.toFixed(1), i], (err) => {
+      // 每条数据间隔10秒
+      db.query(query, [deviceId, temp.toFixed(1), humidity.toFixed(1), gas.toFixed(1), co2, i * 10], (err) => {
         if (err) reject(err);
         else resolve();
       });
@@ -349,8 +389,68 @@ app.post('/api/mock-data', (req, res) => {
     });
 });
 
+// 9. AI 生成周报
+app.get('/api/analysis/weekly-report', async (req, res) => {
+  const { device_id, start_date, end_date } = req.query;
+  
+  if (!device_id || !start_date || !end_date) {
+    return res.status(400).json({ success: false, error: '缺少必要参数 (device_id, start_date, end_date)' });
+  }
+  
+  try {
+    const report = await aiAnalysisService.generateWeeklyReport(db, device_id, start_date, end_date);
+    res.json({
+      success: true,
+      data: report
+    });
+  } catch (error) {
+    console.error('AI周报生成路由错误:', error);
+    res.status(500).json({ success: false, error: '生成报告失败' });
+  }
+});
+
+// 10. AI 报警异常分析
+app.post('/api/analysis/abnormality', async (req, res) => {
+  const { alarm_id } = req.body;
+  
+  if (!alarm_id) {
+    return res.status(400).json({ success: false, error: '缺少报警记录ID (alarm_id)' });
+  }
+  
+  try {
+    // 1. 获取报警记录详情
+    const getAlarmQuery = 'SELECT * FROM alarm_log WHERE id = ?';
+    db.query(getAlarmQuery, [alarm_id], async (err, results) => {
+      if (err || results.length === 0) {
+        return res.status(404).json({ success: false, error: '未找到指定的报警记录' });
+      }
+      
+      const currentAlarm = results[0];
+      
+      // 2. 调用 AI 分析服务
+      const analysisResult = await aiAnalysisService.analyzeAbnormality(db, currentAlarm, alarmThresholds);
+      
+      // 3. (可选) 将分析结果保存到数据库
+      // 如果 alarm_log 表加了 ai_analysis 字段，可以写回数据库
+      const updateQuery = 'UPDATE alarm_log SET ai_analysis = ? WHERE id = ?';
+      db.query(updateQuery, [analysisResult, alarm_id], (updateErr) => {
+        if (updateErr) console.error('保存AI分析结果失败', updateErr);
+      });
+      
+      res.json({
+        success: true,
+        data: analysisResult
+      });
+    });
+    
+  } catch (error) {
+    console.error('AI报警分析路由错误:', error);
+    res.status(500).json({ success: false, error: '异常分析失败' });
+  }
+});
+
 // 报警检查函数
-function checkAlarms(deviceId, temp, humidity, gas) {
+function checkAlarms(deviceId, temp, humidity, gas, co2) {
   const alarms = [];
 
   // 温度报警
@@ -361,7 +461,7 @@ function checkAlarms(deviceId, temp, humidity, gas) {
         alarm_type: 'temperature_low',
         alarm_value: temp,
         threshold: alarmThresholds.temperature.min,
-        message: `⚠️ 温度过低: ${temp.toFixed(1)}°C (低于${alarmThresholds.temperature.min}°C)`
+        message: `⚠️ 温度过低: ${parseFloat(temp).toFixed(1)}°C (低于${alarmThresholds.temperature.min}°C)`
       });
     } else if (temp > alarmThresholds.temperature.max) {
       alarms.push({
@@ -369,7 +469,7 @@ function checkAlarms(deviceId, temp, humidity, gas) {
         alarm_type: 'temperature_high',
         alarm_value: temp,
         threshold: alarmThresholds.temperature.max,
-        message: `🔥 温度过高: ${temp.toFixed(1)}°C (高于${alarmThresholds.temperature.max}°C)`
+        message: `🔥 温度过高: ${parseFloat(temp).toFixed(1)}°C (高于${alarmThresholds.temperature.max}°C)`
       });
     }
   }
@@ -382,7 +482,7 @@ function checkAlarms(deviceId, temp, humidity, gas) {
         alarm_type: 'humidity_low',
         alarm_value: humidity,
         threshold: alarmThresholds.humidity.min,
-        message: `💧 湿度过低: ${humidity.toFixed(1)}% (低于${alarmThresholds.humidity.min}%)`
+        message: `💧 湿度过低: ${parseFloat(humidity).toFixed(1)}% (低于${alarmThresholds.humidity.min}%)`
       });
     } else if (humidity > alarmThresholds.humidity.max) {
       alarms.push({
@@ -390,7 +490,7 @@ function checkAlarms(deviceId, temp, humidity, gas) {
         alarm_type: 'humidity_high',
         alarm_value: humidity,
         threshold: alarmThresholds.humidity.max,
-        message: `💦 湿度过高: ${humidity.toFixed(1)}% (高于${alarmThresholds.humidity.max}%)`
+        message: `💦 湿度过高: ${parseFloat(humidity).toFixed(1)}% (高于${alarmThresholds.humidity.max}%)`
       });
     }
   }
@@ -402,12 +502,23 @@ function checkAlarms(deviceId, temp, humidity, gas) {
       alarm_type: 'gas_high',
       alarm_value: gas,
       threshold: alarmThresholds.gas.max,
-      message: `☠️ 气体浓度过高: ${gas.toFixed(1)}ppm (高于${alarmThresholds.gas.max}ppm)`
+      message: `☠️ 气体浓度过高: ${parseFloat(gas).toFixed(1)}ppm (高于${alarmThresholds.gas.max}ppm)`
+    });
+  }
+
+  // 二氧化碳报警
+  if (co2 !== undefined && co2 > alarmThresholds.co2.max) {
+    alarms.push({
+      device_id: deviceId,
+      alarm_type: 'co2_high',
+      alarm_value: co2,
+      threshold: alarmThresholds.co2.max,
+      message: `😷 二氧化碳浓度过高: ${parseFloat(co2).toFixed(1)}ppm (高于${alarmThresholds.co2.max}ppm)`
     });
   }
 
   // 插入报警记录
-  alarms.forEach(alarm => {
+  alarms.forEach(alarm => { 
     const query = `
       INSERT INTO alarm_log (device_id, alarm_type, alarm_value, threshold, message) 
       VALUES (?, ?, ?, ?, ?)

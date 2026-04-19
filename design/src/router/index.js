@@ -8,8 +8,8 @@ const routes = [
     component: Dashboard,
     meta: {
       title: '实时监控',
-      activeMenu: 'dashboard'
-    }
+      activeMenu: 'dashboard',
+    },
   },
   {
     path: '/history',
@@ -17,8 +17,8 @@ const routes = [
     component: () => import('@/views/History.vue'),
     meta: {
       title: '历史数据',
-      activeMenu: 'history'
-    }
+      activeMenu: 'history',
+    },
   },
   {
     path: '/alarm',
@@ -26,8 +26,8 @@ const routes = [
     component: () => import('@/views/Alarm.vue'),
     meta: {
       title: '报警管理',
-      activeMenu: 'alarm'
-    }
+      activeMenu: 'alarm',
+    },
   },
   {
     path: '/devices',
@@ -35,8 +35,8 @@ const routes = [
     component: () => import('@/views/Devices.vue'),
     meta: {
       title: '设备管理',
-      activeMenu: 'devices'
-    }
+      activeMenu: 'devices',
+    },
   },
   {
     path: '/login',
@@ -44,8 +44,8 @@ const routes = [
     component: () => import('@/views/Login.vue'),
     meta: {
       title: '登录',
-      hideInMenu: true
-    }
+      hideInMenu: true,
+    },
   },
   {
     path: '/:pathMatch(.*)*',
@@ -53,20 +53,20 @@ const routes = [
     component: () => import('@/views/NotFound.vue'),
     meta: {
       title: '404',
-      hideInMenu: true
-    }
-  }
+      hideInMenu: true,
+    },
+  },
 ]
 
 const router = createRouter({
   history: createWebHistory(),
-  routes
+  routes,
 })
 
 // 路由守卫：设置页面标题和登录拦截
 router.beforeEach((to, from, next) => {
   document.title = to.meta.title ? `${to.meta.title} - 牛舍监控系统` : '牛舍监控系统'
-  
+
   // 简单的登录验证拦截
   const isAuthenticated = !!localStorage.getItem('token')
   if (to.name !== 'Login' && !isAuthenticated) {

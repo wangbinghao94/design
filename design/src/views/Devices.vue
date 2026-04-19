@@ -33,13 +33,7 @@
       </el-row>
 
       <!-- 设备列表 -->
-      <el-table
-        :data="devices"
-        style="width: 100%"
-        border
-        stripe
-        v-loading="loading"
-      >
+      <el-table :data="devices" style="width: 100%" border stripe v-loading="loading">
         <el-table-column prop="device_id" label="设备ID" width="150" />
         <el-table-column prop="name" label="设备名称" width="150">
           <template #default="{ row }">
@@ -79,11 +73,7 @@
     </el-card>
 
     <!-- 编辑设备弹窗 -->
-    <el-dialog
-      v-model="dialogVisible"
-      title="编辑设备配置"
-      width="500px"
-    >
+    <el-dialog v-model="dialogVisible" title="编辑设备配置" width="500px">
       <el-form :model="editForm" :rules="rules" ref="editFormRef" label-width="100px">
         <el-form-item label="设备ID">
           <el-input v-model="editForm.device_id" disabled />
@@ -98,9 +88,7 @@
       <template #footer>
         <span class="dialog-footer">
           <el-button @click="dialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="submitEdit" :loading="submitLoading">
-            保存
-          </el-button>
+          <el-button type="primary" @click="submitEdit" :loading="submitLoading"> 保存 </el-button>
         </span>
       </template>
     </el-dialog>
@@ -108,95 +96,95 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
-import { Refresh, Edit } from '@element-plus/icons-vue';
-import { ElMessage } from 'element-plus';
-import api from '@/api';
+import { ref, reactive, onMounted } from 'vue'
+import { Refresh, Edit } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import api from '@/api'
 
 // 状态
-const loading = ref(false);
-const devices = ref([]);
-const onlineCount = ref(0);
+const loading = ref(false)
+const devices = ref([])
+const onlineCount = ref(0)
 
 // 编辑弹窗
-const dialogVisible = ref(false);
-const submitLoading = ref(false);
-const editFormRef = ref(null);
+const dialogVisible = ref(false)
+const submitLoading = ref(false)
+const editFormRef = ref(null)
 const editForm = reactive({
   device_id: '',
   name: '',
-  location: ''
-});
+  location: '',
+})
 
 const rules = {
-  name: [{ required: true, message: '请输入设备名称', trigger: 'blur' }]
-};
+  name: [{ required: true, message: '请输入设备名称', trigger: 'blur' }],
+}
 
 onMounted(() => {
-  fetchDevices();
-});
+  fetchDevices()
+})
 
 // 获取设备列表
 async function fetchDevices() {
-  loading.value = true;
+  loading.value = true
   try {
-    const res = await api.device.getDevices();
+    const res = await api.device.getDevices()
     if (res.success) {
-      devices.value = res.devices;
-      onlineCount.value = res.onlineCount;
+      devices.value = res.devices
+      onlineCount.value = res.onlineCount
     } else {
-      ElMessage.error('获取设备列表失败');
+      ElMessage.error('获取设备列表失败')
     }
   } catch (error) {
-    console.error(error);
-    ElMessage.error('网络异常');
+    console.error(error)
+    ElMessage.error('网络异常')
   } finally {
-    loading.value = false;
+    loading.value = false
   }
 }
 
 // 打开编辑弹窗
 function openEditDialog(row) {
-  editForm.device_id = row.device_id;
-  editForm.name = row.name || '';
-  editForm.location = row.location || '';
-  dialogVisible.value = true;
+  editForm.device_id = row.device_id
+  editForm.name = row.name || ''
+  editForm.location = row.location || ''
+  dialogVisible.value = true
 }
 
 // 提交编辑
 async function submitEdit() {
-  if (!editFormRef.value) return;
-  
+  if (!editFormRef.value) return
+
   await editFormRef.value.validate(async (valid) => {
     if (valid) {
-      submitLoading.value = true;
+      submitLoading.value = true
       try {
         const res = await api.device.updateDevice(editForm.device_id, {
           name: editForm.name,
-          location: editForm.location
-        });
-        
+          location: editForm.location,
+        })
+
         if (res.success) {
-          ElMessage.success('设备配置已更新');
-          dialogVisible.value = false;
-          fetchDevices(); // 刷新列表
+          ElMessage.success('设备配置已更新')
+          dialogVisible.value = false
+          fetchDevices() // 刷新列表
         } else {
-          ElMessage.error(res.error || '更新失败');
+          ElMessage.error(res.error || '更新失败')
         }
       } catch (error) {
-        console.error(error);
-        ElMessage.error('网络异常');
+        console.error(error)
+        ElMessage.error('网络异常')
       } finally {
-        submitLoading.value = false;
+        submitLoading.value = false
       }
     }
-  });
+  })
 }
 
 // 格式化时间
 function formatTime(timeStr) {
-  if (!timeStr) return '--';
-  return new Date(timeStr).toLocaleString('zh-CN');
+  if (!timeStr) return '--'
+  return new Date(timeStr).toLocaleString('zh-CN')
 }
 </script>
 

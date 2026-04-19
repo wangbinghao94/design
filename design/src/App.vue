@@ -1,14 +1,32 @@
 <template>
   <div id="app" :class="[theme]">
-    <template v-if="route.name !== 'Login'">
-      <!-- 顶部导航栏 -->
+    <!-- 大屏模式不显示普通导航栏和侧边边距 -->
+    <template v-if="route.name === 'Dashboard'">
+      <router-view v-slot="{ Component }">
+        <transition name="fade-transform" mode="out-in">
+          <component :is="Component" />
+        </transition>
+      </router-view>
+      <!-- 大屏右上角依然保留退出等基础操作，但采用悬浮方式 -->
+      <div class="screen-float-tools">
+        <el-tooltip content="退出大屏进入后台系统">
+          <el-button circle class="float-btn" :icon="Setting" @click="router.push('/history')" />
+        </el-tooltip>
+        <el-tooltip content="退出登录">
+          <el-button circle class="float-btn" :icon="SwitchButton" @click="handleLogout" />
+        </el-tooltip>
+      </div>
+    </template>
+
+    <template v-else-if="route.name !== 'Login'">
+      <!-- 顶部导航栏 (普通后台模式) -->
       <el-header class="app-header" height="60px">
         <div class="header-content">
           <!-- 左侧：Logo和系统名称 -->
           <div class="header-left">
-            <div class="logo-container">
+            <div class="logo-container" @click="router.push('/')">
               <el-icon class="logo-icon"><Monitor /></el-icon>
-              <h1 class="system-name">牛舍环境监控系统</h1>
+              <h1 class="system-name">牛舍监控后台系统</h1>
             </div>
           </div>
 
@@ -23,7 +41,7 @@
             >
               <el-menu-item index="dashboard">
                 <el-icon><DataLine /></el-icon>
-                <span>实时监控</span>
+                <span>大屏看板</span>
               </el-menu-item>
               <el-menu-item index="history">
                 <el-icon><Histogram /></el-icon>
@@ -38,24 +56,6 @@
                 <el-icon><Cpu /></el-icon>
                 <span>设备管理</span>
               </el-menu-item>
-              <!-- <el-sub-menu index="more">
-                <template #title>
-                  <el-icon><MoreFilled /></el-icon>
-                  <span>更多</span>
-                </template>
-                <el-menu-item index="settings">
-                  <el-icon><Setting /></el-icon>
-                  <span>系统设置</span>
-                </el-menu-item>
-                <el-menu-item index="help">
-                  <el-icon><QuestionFilled /></el-icon>
-                  <span>使用帮助</span>
-                </el-menu-item>
-                <el-menu-item index="about">
-                  <el-icon><InfoFilled /></el-icon>
-                  <span>关于系统</span>
-                </el-menu-item>
-              </el-sub-menu> -->
             </el-menu>
           </div>
 
@@ -729,6 +729,32 @@ watch(
 .footer-left span,
 .footer-right span {
   white-space: nowrap;
+}
+
+.screen-float-tools {
+  position: fixed;
+  right: 20px;
+  top: 20px;
+  z-index: 2000;
+  display: flex;
+  gap: 10px;
+}
+
+.float-btn {
+  background-color: rgba(13, 20, 40, 0.6) !important;
+  border: 1px solid rgba(0, 216, 255, 0.3) !important;
+  color: #00d8ff !important;
+  box-shadow: 0 0 10px rgba(0, 216, 255, 0.2) inset;
+  transition: all 0.3s;
+}
+
+.float-btn:hover {
+  background-color: rgba(0, 216, 255, 0.2) !important;
+  color: #fff !important;
+  box-shadow:
+    0 0 15px rgba(0, 216, 255, 0.4) inset,
+    0 0 10px rgba(0, 216, 255, 0.4);
+  transform: scale(1.1);
 }
 
 .global-notifications {
