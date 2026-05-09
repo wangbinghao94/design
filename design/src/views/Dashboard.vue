@@ -132,6 +132,11 @@
                   <span :class="getHumidityClass(row.humidity)">{{ row.humidity }}</span>
                 </template>
               </el-table-column>
+              <el-table-column prop="gas_concentration" label="有害气体" width="90">
+                <template #default="{ row }">
+                  <span :class="getGasClass(row.gas_concentration)">{{ row.gas_concentration }}</span>
+                </template>
+              </el-table-column>
               <el-table-column prop="co2" label="CO2" width="70">
                 <template #default="{ row }">
                   <span :class="getCo2Class(row.co2)">{{ row.co2 }}</span>
@@ -214,6 +219,7 @@ onBeforeUnmount(() => {
 
 // 初始化
 async function initialize() {
+  await monitorStore.fetchDevices()
   await fetchThresholds()
   await fetchRealtimeData()
   await nextTick() // 等待DOM更新

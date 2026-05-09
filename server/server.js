@@ -114,29 +114,28 @@ app.post('/api/sensor-data', (req, res) => {
 
 // 模拟CO2生成函数
 function generateSimulatedCO2(temperature, humidity, gasConcentration) {
-  // 基础CO2浓度（牛舍正常范围800-1500ppm）
-  const baseCO2 = 1000;
+  // 大气基础CO2浓度约 400ppm
+  // 奶牛呼吸会产生大量CO2，通风良好时在 600-1200ppm 之间
+  // 通风不良时会显著上升，与氨气和湿度正相关
   
-  // 温度影响：温度每升高1°C，CO2增加15ppm
-  const tempFactor = (temperature - 25) * 15;
+  let baseCO2 = 800; // 默认基础值 (良好通风)
   
-  // 湿度影响：湿度每升高1%，CO2增加8ppm
-  const humidityFactor = (humidity - 60) * 8;
+  // 湿度影响：湿度过高通常意味着通风不良，CO2积聚
+  const humidityFactor = humidity > 75 ? (humidity - 75) * 40 : 0;
   
-  // 气体浓度影响：如果有氨气浓度，也作为参考
-  const gasFactor = gasConcentration ? gasConcentration * 0.1 : 0;
+  // 氨气影响：氨气高同样意味着排泄物发酵和通风极差
+  const gasFactor = gasConcentration > 20 ? (gasConcentration - 20) * 30 : gasConcentration * 5;
   
   // 随机波动 ±50ppm
   const randomFactor = (Math.random() * 100 - 50);
-  
+
   // 计算最终CO2值
-  let co2 = baseCO2 + tempFactor + humidityFactor + gasFactor + randomFactor;
+  let co2 = baseCO2 + humidityFactor + gasFactor + randomFactor;
+
+  // 确保在合理范围内（400-3500ppm，超过2000即认为空气极其混浊）
+  co2 = Math.max(400, Math.min(3500, co2));
   
-  // 确保在合理范围内（600-2500ppm）
-  co2 = Math.max(600, Math.min(2500, co2));
-  
-  // 保留两位小数
-  return parseFloat(co2.toFixed(2));
+  return Math.round(co2);
 }
 
 // 2. 获取最新数据
@@ -350,22 +349,36 @@ app.get('/api/statistics', (req, res) => {
 });
 
 // 8. 模拟数据接口（用于测试）
-app.post('/api/mock-data', (req, res) => {
-  const { count = 10 } = req.body;
-  const deviceId = 'ESP32_001';
-  
-  const insertPromises = [];
-  for (let i = 0; i < count; i++) {
-    const temp = 20 + Math.random() * 10; // 20-30度
-    const humidity = 50 + Math.random() * 30; // 50-80%
-    const gas = 20 + Math.random() * 30; // 20-50 ppm
-    const co2 = generateSimulatedCO2(temp, humidity, gas);
-    const timeOffset = i * 3600000; // 每1小时一条
+  app.post('/api/mock-data', (req, res) => {
+    const { count = 10 } = req.body;
+    const deviceId = 'ESP32_001';
     
-    const query = `
-      INSERT INTO sensor_data (device_id, temperature, humidity, gas_concentration, co2, created_at) 
-      VALUES (?, ?, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? SECOND))
-    `;
+    const insertPromises = [];
+    for (let i = 0; i < count; i++) {
+      let temp, humidity, gas;
+      
+      // 90%概率生成适宜的正常数据，10%概率生成异常数据
+      const isAbnormal = Math.random() > 0.9;
+      
+      if (isAbnormal) {
+        // 异常数据（模拟夏季高温高湿、通风不良）
+        temp = 28 + Math.random() * 7; // 28-35°C (热应激)
+        humidity = 80 + Math.random() * 15; // 80-95% (高湿)
+        gas = 25 + Math.random() * 20; // 25-45 ppm (氨气超标)
+      } else {
+        // 适宜的正常数据（奶牛最适宜温度范围约 5-20°C，这里模拟 10-22°C 左右的舒适环境）
+        temp = 10 + Math.random() * 12; // 10-22°C
+        humidity = 50 + Math.random() * 20; // 50-70% (适宜湿度)
+        gas = 5 + Math.random() * 10; // 5-15 ppm (氨气正常)
+      }
+      
+      const co2 = generateSimulatedCO2(temp, humidity, gas);
+      const timeOffset = i * 3600000; // 每1小时一条
+      
+      const query = `
+        INSERT INTO sensor_data (device_id, temperature, humidity, gas_concentration, co2, created_at) 
+        VALUES (?, ?, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? SECOND))
+      `;
     
     insertPromises.push(new Promise((resolve, reject) => {
       // 每条数据间隔10秒
@@ -547,6 +560,41 @@ app.get('/api/health', (req, res) => {
     database: 'connected'
   });
 });
+
+// --- 自动生成模拟数据 (用于测试无硬件连接时自动刷新前端) ---
+setInterval(() => {
+  const device_id = 'ESP32_001';
+  let temp, humidity, gas;
+  
+  // 90%概率生成适宜的正常数据，10%概率生成异常数据
+  const isAbnormal = Math.random() > 0.9;
+  
+  if (isAbnormal) {
+    temp = 28 + Math.random() * 7; 
+    humidity = 80 + Math.random() * 15; 
+    gas = 25 + Math.random() * 20; 
+  } else {
+    temp = 10 + Math.random() * 12; 
+    humidity = 50 + Math.random() * 20; 
+    gas = 5 + Math.random() * 10; 
+  }
+  
+  const co2 = generateSimulatedCO2(temp, humidity, gas);
+  
+  const sensorQuery = `
+    INSERT INTO sensor_data (device_id, temperature, humidity, gas_concentration, co2) 
+    VALUES (?, ?, ?, ?, ?)
+  `;
+  
+  db.query(sensorQuery, [device_id, temp.toFixed(1), humidity.toFixed(1), gas.toFixed(1), co2], (err) => {
+    if (!err) {
+      // 更新设备在线状态
+      db.query(`UPDATE device SET online = 1, last_active_time = NOW() WHERE device_id = ?`, [device_id]);
+      // 触发报警检查
+      checkAlarms(device_id, temp, humidity, gas, co2);
+    }
+  });
+}, 10000);
 
 // 启动服务器
 app.listen(PORT, () => {
